@@ -17,6 +17,7 @@
     "clsx": "^2.1.1",
     "dotenv": "^16.3.1",
     "next": "16.0.6",
+    "postgres": "^3.4.7",
     "react": "19.2.0",
     "react-dom": "19.2.0",
     "tailwind-merge": "^3.4.0"

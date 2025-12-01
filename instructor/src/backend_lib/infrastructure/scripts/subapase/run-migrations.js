@@ -1,206 +1,284 @@
 #!/usr/bin/env node
 
 /**
- * Migration Runner Script
- * 
- * This script runs SQL migrations from the migrations folder in order.
- * It tracks which migrations have been executed to prevent duplicates.
- * 
+ * Migration Runner Script - Automatic Execution
+ *
+ * This script automatically executes SQL migrations using the 'postgres' library.
+ * It prioritizes SUPABASE_DATABASE_URL from .env if available.
+ *
  * Usage:
  *   node run-migrations.js [folderName]
- *   
- * Example:
- *   node run-migrations.js supabase
  */
 
-const fs = require('fs');
-const path = require('path');
-require('dotenv').config({ path: path.resolve(__dirname, '../../../../../.env') });
+const fs = require("fs");
+const path = require("path");
+const postgres = require("postgres");
+require("dotenv").config({
+  path: path.resolve(__dirname, "../../../../../.env"),
+});
 
 // Get folder name from command line args or use default
-const folderName = process.argv[2] || 'subapase';
+const folderName = process.argv[2] || "subapase";
 
-// Validate environment variables
+// Get environment variables
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const SUPABASE_DB_PASSWORD = process.env.SUPABASE_DB_PASSWORD;
+let DATABASE_URL =
+  process.env.SUPABASE_DATABASE_URL || process.env.DATABASE_URL;
 
-if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
-    console.error('❌ Error: Missing required environment variables');
-    console.error('Please ensure the following are set in your .env file:');
-    console.error('  - NEXT_PUBLIC_SUPABASE_URL');
-    console.error('  - SUPABASE_SERVICE_ROLE_KEY');
-    process.exit(1);
+// Handle variable substitution in DATABASE_URL
+if (DATABASE_URL && SUPABASE_DB_PASSWORD) {
+  DATABASE_URL = DATABASE_URL.replace(
+    "{SUPABASE_DB_PASSWORD}",
+    encodeURIComponent(SUPABASE_DB_PASSWORD)
+  );
+  DATABASE_URL = DATABASE_URL.replace(
+    "${SUPABASE_DB_PASSWORD}",
+    encodeURIComponent(SUPABASE_DB_PASSWORD)
+  );
+
+  if (DATABASE_URL.includes("[YOUR-PASSWORD]")) {
+    DATABASE_URL = DATABASE_URL.replace(
+      "[YOUR-PASSWORD]",
+      encodeURIComponent(SUPABASE_DB_PASSWORD)
+    );
+  }
 }
 
-// Import Supabase client
-const { createClient } = require('@supabase/supabase-js');
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+console.log(`📊 Debug Info:`);
+if (SUPABASE_URL) {
+  const projectRef = SUPABASE_URL.replace("https://", "").split(".")[0];
+  console.log(`   Project Ref: ${projectRef}`);
+}
+if (SUPABASE_DB_PASSWORD) {
+  console.log(`   Password length: ${SUPABASE_DB_PASSWORD.length} characters`);
+}
+console.log("");
 
 // Path to migrations folder
-const migrationsDir = path.join(__dirname, '../../migrations', folderName);
+const migrationsDir = path.join(__dirname, "../../migrations", folderName);
 
 /**
- * Ensure the schema_migrations table exists
+ * Get the connection string to use
  */
-async function ensureMigrationsTable() {
-    try {
-        // Try to query the table
-        const { error } = await supabase
-            .from('schema_migrations')
-            .select('migration_name')
-            .limit(1);
+function getConnectionString() {
+  if (DATABASE_URL) {
+    console.log("   Using connection string from SUPABASE_DATABASE_URL");
+    return DATABASE_URL;
+  }
 
-        if (error) {
-            // Table doesn't exist, we need to create it
-            console.log('📋 Creating schema_migrations table...');
+  if (!SUPABASE_URL || !SUPABASE_DB_PASSWORD) {
+    console.error("❌ Error: Missing required environment variables");
+    process.exit(1);
+  }
 
-            // Read and execute the 000_migrations_table.sql file
-            const migrationTablePath = path.join(migrationsDir, '000_migrations_table.sql');
+  // Fallback to constructing it if no DATABASE_URL provided
+  const projectRef = SUPABASE_URL.replace("https://", "").split(".")[0];
+  const encodedPassword = encodeURIComponent(SUPABASE_DB_PASSWORD);
 
-            if (!fs.existsSync(migrationTablePath)) {
-                console.error('❌ Error: 000_migrations_table.sql not found');
-                console.error('   This file is required to create the migrations tracking table');
-                process.exit(1);
-            }
-
-            const sql = fs.readFileSync(migrationTablePath, 'utf8');
-            console.log('   ⚠️  Please run the following SQL in Supabase SQL Editor:');
-            console.log('   ' + migrationTablePath);
-            console.log('');
-            console.log('   Or copy and paste this SQL:');
-            console.log('   ---');
-            console.log(sql);
-            console.log('   ---');
-            console.log('');
-            console.log('   After running the SQL, run this script again.');
-            process.exit(0);
-        }
-    } catch (err) {
-        console.error('❌ Error checking migrations table:', err.message);
-        process.exit(1);
-    }
-}
-
-/**
- * Check if a migration has already been executed
- */
-async function isMigrationExecuted(migrationName) {
-    const { data, error } = await supabase
-        .from('schema_migrations')
-        .select('migration_name')
-        .eq('migration_name', migrationName)
-        .single();
-
-    if (error && error.code !== 'PGRST116') {
-        // PGRST116 is "not found" error, which is expected for new migrations
-        console.error('Error checking migration status:', error);
-        return false;
-    }
-
-    return !!data;
-}
-
-/**
- * Mark a migration as executed
- */
-async function markMigrationExecuted(migrationName) {
-    const { error } = await supabase
-        .from('schema_migrations')
-        .insert({ migration_name: migrationName });
-
-    if (error) {
-        throw error;
-    }
+  // Default to direct connection
+  return `postgresql://postgres:${encodedPassword}@db.${projectRef}.supabase.co:5432/postgres`;
 }
 
 /**
  * Main migration runner
  */
 async function runMigrations() {
-    console.log('🚀 Starting migration process...');
-    console.log(`📁 Migrations folder: ${folderName}`);
-    console.log(`🔗 Supabase URL: ${SUPABASE_URL}`);
-    console.log('');
+  console.log("🚀 Starting migration process...");
+  console.log(`📁 Migrations folder: ${folderName}`);
+  console.log(`🔗 Supabase URL: ${SUPABASE_URL}`);
+  console.log("");
 
-    // Check if migrations directory exists
-    if (!fs.existsSync(migrationsDir)) {
-        console.error(`❌ Error: Migrations directory not found: ${migrationsDir}`);
-        process.exit(1);
+  // Check if migrations directory exists
+  if (!fs.existsSync(migrationsDir)) {
+    console.error(`❌ Error: Migrations directory not found: ${migrationsDir}`);
+    process.exit(1);
+  }
+
+  const connectionString = getConnectionString();
+
+  // Mask password for logging
+  const maskedString = connectionString.replace(/:([^@]+)@/, ":****@");
+  console.log(`   Connection: ${maskedString}`);
+  console.log("🔌 Connecting to database...");
+
+  // Create SQL connection
+  const sql = postgres(connectionString, {
+    ssl: { rejectUnauthorized: false },
+    max: 1,
+    onnotice: () => {}, // Silence notices
+  });
+
+  try {
+    // Test connection
+    await sql`SELECT 1`;
+    console.log("   ✅ Connected successfully!");
+    console.log("");
+
+    // Ensure migrations table exists in public schema
+    const [tableExists] = await sql`
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_schema = 'public' 
+                AND table_name = 'schema_migrations'
+            )
+        `;
+
+    if (!tableExists.exists) {
+      console.log("▶️  Creating migrations table...");
+      const migrationsTablePath = path.join(
+        migrationsDir,
+        "000_migrations_table.sql"
+      );
+      if (fs.existsSync(migrationsTablePath)) {
+        const fileContent = fs.readFileSync(migrationsTablePath, "utf8");
+        await sql.unsafe(fileContent);
+        console.log("   ✅ Migrations table created successfully!\n");
+      } else {
+        // Create table directly if migration file doesn't exist
+        await sql`
+                    CREATE TABLE IF NOT EXISTS public.schema_migrations (
+                        id SERIAL PRIMARY KEY,
+                        migration_name TEXT NOT NULL UNIQUE,
+                        executed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_schema_migrations_name ON public.schema_migrations(migration_name);
+                `;
+        console.log("   ✅ Migrations table created successfully!\n");
+      }
     }
-
-    // Ensure migrations table exists
-    await ensureMigrationsTable();
 
     // Read all SQL files from migrations directory
-    const files = fs.readdirSync(migrationsDir)
-        .filter(file => file.endsWith('.sql'))
-        .sort(); // Sort alphabetically to ensure order
+    const files = fs
+      .readdirSync(migrationsDir)
+      .filter((file) => file.endsWith(".sql") && !file.startsWith("_"))
+      .sort();
 
     if (files.length === 0) {
-        console.log('✅ No migration files found');
-        return;
+      console.log("✅ No migration files found");
+      await sql.end();
+      return;
     }
 
-    console.log(`📝 Found ${files.length} migration file(s):\n`);
+    console.log(`📝 Found ${files.length} migration file(s)\n`);
 
     let executedCount = 0;
     let skippedCount = 0;
 
     for (const file of files) {
-        const migrationName = file;
-        const filePath = path.join(migrationsDir, file);
+      const migrationName = file;
+      const filePath = path.join(migrationsDir, file);
 
-        try {
-            // Skip the migrations table file if it's already been handled
-            if (file === '000_migrations_table.sql') {
-                console.log(`⏭️  Skipping ${migrationName} (migrations table already exists)`);
-                skippedCount++;
-                continue;
-            }
-
-            // Check if migration has already been executed
-            const alreadyExecuted = await isMigrationExecuted(migrationName);
-
-            if (alreadyExecuted) {
-                console.log(`⏭️  Skipping ${migrationName} (already executed)`);
-                skippedCount++;
-                continue;
-            }
-
-            console.log(`▶️  Executing ${migrationName}...`);
-
-            // Read the migration
-            const sql = fs.readFileSync(filePath, 'utf8');
-
-            // For Supabase, we'll log the SQL and ask the user to run it manually
-            console.log(`   ⚠️  Automatic execution not available`);
-            console.log(`   📋 Please run this migration manually in Supabase SQL Editor:`);
-            console.log(`   ${filePath}`);
-
-            // Mark as executed to track it
-            await markMigrationExecuted(migrationName);
+      try {
+        // Handle migrations table creation
+        if (file === "000_migrations_table.sql") {
+          // Check if table already exists
+          const [stillExists] = await sql`
+                        SELECT EXISTS (
+                            SELECT FROM information_schema.tables 
+                            WHERE table_schema = 'public' 
+                            AND table_name = 'schema_migrations'
+                        )
+                    `;
+          if (stillExists.exists) {
+            console.log(
+              `⏭️  Skipping ${migrationName} (migrations table already exists)`
+            );
+            skippedCount++;
+            continue;
+          } else {
+            console.log(`▶️  Creating migrations table...`);
+            const fileContent = fs.readFileSync(filePath, "utf8");
+            await sql.unsafe(fileContent);
+            console.log(`   ✅ Migrations table created successfully!\n`);
             executedCount++;
-            console.log(`   ✅ Marked as executed\n`);
-
-        } catch (error) {
-            console.error(`❌ Error executing ${migrationName}:`);
-            console.error(error.message);
-            process.exit(1);
+            continue;
+          }
         }
+
+        // Check if migration has already been executed (using schema-qualified table name)
+        let executed = null;
+        try {
+          const [result] = await sql`
+                        SELECT migration_name FROM public.schema_migrations WHERE migration_name = ${migrationName}
+                    `;
+          executed = result;
+        } catch (checkError) {
+          // If table doesn't exist, create it
+          if (checkError.message.includes("does not exist")) {
+            console.log("⚠️  Migrations table not found, creating it...");
+            const migrationsTablePath = path.join(
+              migrationsDir,
+              "000_migrations_table.sql"
+            );
+            if (fs.existsSync(migrationsTablePath)) {
+              const fileContent = fs.readFileSync(migrationsTablePath, "utf8");
+              await sql.unsafe(fileContent);
+            }
+            // Retry the check
+            const [result] = await sql`
+                            SELECT migration_name FROM public.schema_migrations WHERE migration_name = ${migrationName}
+                        `;
+            executed = result;
+          } else {
+            throw checkError;
+          }
+        }
+
+        if (executed) {
+          console.log(`⏭️  Skipping ${migrationName} (already executed)`);
+          skippedCount++;
+          continue;
+        }
+
+        console.log(`▶️  Executing ${migrationName}...`);
+
+        // Read and execute the migration
+        const fileContent = fs.readFileSync(filePath, "utf8");
+
+        // Use a transaction for safety
+        await sql.begin(async (sql) => {
+          await sql.unsafe(fileContent);
+          await sql`
+                        INSERT INTO public.schema_migrations (migration_name) 
+                        VALUES (${migrationName}) 
+                        ON CONFLICT (migration_name) DO NOTHING
+                    `;
+        });
+
+        executedCount++;
+        console.log(`   ✅ Executed successfully!\n`);
+      } catch (error) {
+        console.error(`❌ Error executing ${migrationName}:`);
+        console.error(`   ${error.message}`);
+        process.exit(1);
+      }
     }
 
-    console.log('');
-    console.log('✅ Migration process completed!');
+    console.log("");
+    console.log("✅ Migration process completed!");
     console.log(`   Executed: ${executedCount}`);
     console.log(`   Skipped: ${skippedCount}`);
-    console.log('');
-    console.log('⚠️  Note: Due to Supabase limitations, migrations must be run manually');
-    console.log('   in the Supabase SQL Editor. This script tracks which migrations');
-    console.log('   have been executed to prevent duplicates.');
+    console.log("");
+  } catch (error) {
+    console.error("❌ Migration failed:", error.message);
+
+    if (error.message.includes("ENOTFOUND")) {
+      console.error("");
+      console.error(
+        "   ⚠️  DNS Error: The database hostname could not be resolved."
+      );
+      console.error("   Please check your SUPABASE_DATABASE_URL in .env");
+    }
+
+    process.exit(1);
+  } finally {
+    await sql.end();
+  }
 }
 
 // Run migrations
-runMigrations().catch(error => {
-    console.error('❌ Migration failed:', error);
-    process.exit(1);
+runMigrations().catch((error) => {
+  console.error("❌ Unexpected error:", error);
+  process.exit(1);
 });
