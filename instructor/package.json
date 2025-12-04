@@ -5,10 +5,10 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "prebuild": "node src/backend_lib/infrastructure/scripts/subapase/run-migrations.js",
+    "prebuild": "node src/backend_lib/infrastructure/scripts/migrations/run-migrations.js",
     "start": "next start",
     "lint": "eslint",
-    "migrate": "node src/backend_lib/infrastructure/scripts/subapase/run-migrations.js"
+    "migrate": "node src/backend_lib/infrastructure/scripts/migrations/run-migrations.js"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.2.4",

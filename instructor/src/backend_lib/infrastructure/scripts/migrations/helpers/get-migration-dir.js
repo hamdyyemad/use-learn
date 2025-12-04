@@ -31,7 +31,7 @@ module.exports = function getMigrationDir(defaultFolderName = "supabase") {
     // NOTE: Proirity for process.argv not the function argument passing
     const folderName = process.argv[2] || defaultFolderName;
 
-    const migrationsDir = path.join(__dirname, "../../migrations", folderName);
+    const migrationsDir = path.join(__dirname, "../../../migrations", folderName);
 
     if (!fs.existsSync(migrationsDir)) {
         errorHandler(`Migrations directory not found: ${migrationsDir}`);
