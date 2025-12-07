@@ -11,6 +11,7 @@
     "migrate": "node src/backend_lib/infrastructure/scripts/migrations/run-migrations.js"
   },
   "dependencies": {
+    "@monaco-editor/react": "^4.7.0",
     "@radix-ui/react-slot": "^1.2.4",
     "@supabase/supabase-js": "^2.39.0",
     "class-variance-authority": "^0.7.1",
